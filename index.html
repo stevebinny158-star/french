@@ -1,0 +1,871 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  query, 
+  orderBy, 
+  onSnapshot, 
+  serverTimestamp,
+  limit,
+  updateDoc,
+  deleteDoc,
+  deleteField, 
+  doc,
+  setDoc
+} from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously,
+  signInWithCustomToken,
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  Send, Heart, Lock, LogOut, Loader2, User, 
+  Image as ImageIcon, Mic, X, Check, CheckCheck, 
+  Palette, Trash2, Edit2, CornerUpLeft, SmilePlus, 
+  Phone, Video, Info, MoreHorizontal, ArrowLeft, AlertCircle, Smile,
+  Clapperboard, Play, Pause, Square, Settings, Camera
+} from 'lucide-react';
+
+/**
+ * --- CONFIGURATION ---
+ */
+const ACCESS_CODES = {
+  '1024': { name: 'Boyfriend', avatar: 'bg-blue-600', id: 'user_bf', partnerId: 'user_gf' },
+  '2048': { name: 'Girlfriend', avatar: 'bg-rose-500', id: 'user_gf', partnerId: 'user_bf' }
+};
+
+const ENCRYPTION_SECRET = '1024-2048-SECRET-LOVE-KEY'; 
+
+const THEMES = [
+  { 
+    id: 'instagram_classic', 
+    name: 'Classic', 
+    bg: 'bg-white', 
+    text: 'text-gray-900',
+    inputBg: 'bg-gray-100',
+    bubbleMe: 'bg-gradient-to-l from-[#a855f7] to-[#3b82f6]', // Purple to Blue
+    bubbleHer: 'bg-gray-100 text-black',
+    headerBg: 'bg-white/80 backdrop-blur-md border-b border-gray-100'
+  },
+  { 
+    id: 'love', 
+    name: 'Love', 
+    bg: 'bg-gradient-to-br from-pink-50 via-white to-rose-100', 
+    text: 'text-rose-950', 
+    inputBg: 'bg-white/60 border border-rose-200/50 shadow-inner backdrop-blur-sm', 
+    bubbleMe: 'bg-gradient-to-br from-[#ff477e] to-[#ff8fa3] text-white shadow-lg shadow-rose-300/40', 
+    bubbleHer: 'bg-white/90 text-rose-900 shadow-sm border border-rose-100', 
+    headerBg: 'bg-white/40 backdrop-blur-xl border-b border-rose-200/30' 
+  },
+  { 
+    id: 'midnight', 
+    name: 'Midnight', 
+    bg: 'bg-black', 
+    text: 'text-white',
+    inputBg: 'bg-gray-900',
+    bubbleMe: 'bg-gradient-to-l from-[#7928ca] to-[#ff0080]', // Vercel-ish Purple/Pink
+    bubbleHer: 'bg-gray-800 text-white',
+    headerBg: 'bg-black/80 backdrop-blur-md border-b border-gray-800'
+  },
+  {
+    id: 'ocean',
+    name: 'Ocean',
+    bg: 'bg-slate-900',
+    text: 'text-white',
+    inputBg: 'bg-slate-800',
+    bubbleMe: 'bg-gradient-to-l from-[#06b6d4] to-[#3b82f6]', // Cyan to Blue
+    bubbleHer: 'bg-slate-800 text-white',
+    headerBg: 'bg-slate-900/80 backdrop-blur-md border-b border-slate-800'
+  }
+];
+
+const REACTION_EMOJIS = ['❤️', '😂', '😮', '😢', '🔥', '👍'];
+
+const INPUT_EMOJIS_RAW = [
+  '❤️', '😂', '😍', '🥰', '😎', '😭', '😡', '👍', '🔥', '🎉', 
+  '👀', '✨', '💯', '🙏', '💋', '🌹', '🥺', '😴', '🤔', '🤷', 
+  '💀', '👻', '👋', '🙌', '😁', '😆', '😅', '🤣', '🙂', '😉',
+  '😊', '😇', '🙃', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐',
+  '🤓', '🥸', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕'
+];
+
+const INPUT_EMOJIS = [...new Set(INPUT_EMOJIS_RAW)];
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const app = firebaseConfig ? initializeApp(firebaseConfig) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default';
+
+// --- HELPERS ---
+const encryptMessage = (text) => {
+  try {
+    if (!text || typeof text !== 'string') return '';
+    const chars = text.split('');
+    const key = ENCRYPTION_SECRET;
+    const encrypted = chars.map((c, i) => c.charCodeAt(0) ^ key.charCodeAt(i % key.length));
+    return btoa(JSON.stringify(encrypted));
+  } catch (e) { return text; }
+};
+
+const decryptMessage = (cipher) => {
+  try {
+    if (!cipher || typeof cipher !== 'string') return '';
+    const encrypted = JSON.parse(atob(cipher));
+    const key = ENCRYPTION_SECRET;
+    return encrypted.map((c, i) => String.fromCharCode(c ^ key.charCodeAt(i % key.length))).join('');
+  } catch (e) { return 'Encrypted message'; }
+};
+
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const MAX_WIDTH = 800;
+        const MAX_HEIGHT = 800;
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
+      };
+    };
+  });
+};
+
+// --- FIXED VIDEO COMPRESSION ---
+const compressVideo = (file) => {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+    video.src = url;
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = "anonymous";
+
+    video.onloadedmetadata = () => {
+      const canvas = document.createElement('canvas');
+      const width = 320;
+      const height = video.videoHeight * (320 / video.videoWidth);
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      const stream = canvas.captureStream(30);
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'video/webm;codecs=vp9', 
+        bitsPerSecond: 150000
+      });
+
+      const chunks = [];
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          URL.revokeObjectURL(url);
+          resolve(reader.result);
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      // FIX: Defined INSIDE onloadedmetadata so mediaRecorder is available in scope
+      video.onended = () => {
+        setTimeout(() => {
+          if (mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          }
+        }, 100);
+      };
+
+      mediaRecorder.start();
+      video.playbackRate = 2.0; // Speed up compression
+      video.play().catch(e => reject(e));
+
+      const draw = () => {
+        if (video.paused || video.ended) return;
+        ctx.drawImage(video, 0, 0, width, height);
+        requestAnimationFrame(draw);
+      };
+      draw();
+    };
+
+    video.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    };
+  });
+};
+
+const formatMessageDate = (timestamp) => {
+  if (!timestamp || !timestamp.seconds) return '';
+  const date = new Date(timestamp.seconds * 1000);
+  const diffDays = Math.floor((new Date() - date) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0 && date.getDate() === new Date().getDate()) {
+    return `Today ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  } else if (diffDays <= 1) {
+    return `Yesterday ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  }
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
+const formatTimeOnly = (timestamp) => {
+  if (!timestamp || !timestamp.seconds) return '';
+  const date = new Date(timestamp.seconds * 1000);
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+};
+
+const formatGroupDate = (timestamp) => {
+  if (!timestamp || !timestamp.seconds) return '';
+  const date = new Date(timestamp.seconds * 1000);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
+const formatLastSeen = (timestamp) => {
+  if (!timestamp || !timestamp.toMillis) return 'Offline';
+  const diffMs = Date.now() - timestamp.toMillis();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffMins < 1) return 'Active just now'; 
+  if (diffMins < 60) return `Active ${diffMins}m ago`;
+  if (diffHours < 24) return `Active ${diffHours}h ago`;
+  return `Active ${diffDays}d ago`;
+};
+
+const formatDuration = (sec) => {
+  if (typeof sec !== 'number' || isNaN(sec) || !isFinite(sec)) return "0:00";
+  const minutes = Math.floor(sec / 60);
+  const seconds = Math.floor(sec % 60); 
+  return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
+};
+
+// --- COMPONENTS ---
+
+const LinkifiedText = ({ text, isMe }) => {
+  if (!text || typeof text !== 'string') return null;
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        if (part.match(urlRegex)) {
+          return (
+            <a key={i} href={part} target="_blank" rel="noopener noreferrer" className={`underline font-medium hover:opacity-80 break-all ${isMe ? 'text-white' : 'text-blue-500'}`} onClick={(e) => e.stopPropagation()}>{part}</a>
+          );
+        }
+        return part;
+      })}
+    </span>
+  );
+};
+
+const AudioPlayer = ({ src, isMe }) => {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const audioRef = useRef(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const updateProgress = () => {
+      if (audio.duration && !isNaN(audio.duration)) {
+        setProgress((audio.currentTime / audio.duration) * 100);
+      }
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setProgress(0);
+    };
+
+    const handleLoadedMetadata = () => {
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        setDuration(audio.duration);
+      }
+    };
+
+    audio.addEventListener('timeupdate', updateProgress);
+    audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+    return () => {
+      audio.removeEventListener('timeupdate', updateProgress);
+      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, []);
+
+  const togglePlay = (e) => {
+    e.stopPropagation();
+    const audio = audioRef.current;
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  return (
+    <div className="flex items-center space-x-3 min-w-[180px] py-1">
+      <button 
+        onClick={togglePlay} 
+        className={`p-2 rounded-full shadow-sm transition-all active:scale-95 ${isMe ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+      >
+        {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+      </button>
+      
+      <div className="flex flex-col flex-1 space-y-1">
+        <div className={`h-1.5 rounded-full w-full overflow-hidden ${isMe ? 'bg-white/30' : 'bg-gray-300'}`}>
+          <div 
+            className={`h-full transition-all duration-100 ease-linear ${isMe ? 'bg-white' : 'bg-blue-500'}`} 
+            style={{ width: `${progress}%` }}
+          ></div>
+        </div>
+        
+        <div className={`flex justify-between text-[9px] font-medium ${isMe ? 'text-white/70' : 'text-gray-500'}`}>
+          <span>{isPlaying ? formatDuration(Math.floor(audioRef.current?.currentTime || 0)) : formatDuration(Math.floor(duration))}</span>
+          <span>Voice</span>
+        </div>
+      </div>
+      
+      <audio ref={audioRef} src={src} className="hidden" preload="metadata" />
+    </div>
+  );
+};
+
+const Avatar = ({ uid, defaultBg, size = "w-10 h-10", userProfiles }) => {
+  const photoUrl = userProfiles && userProfiles[uid];
+  if (photoUrl) {
+    return <img src={photoUrl} className={`${size} rounded-full object-cover ring-2 ring-transparent shadow-sm`} alt="Avatar" />;
+  }
+  return (
+    <div className={`${size} rounded-full flex items-center justify-center ${defaultBg} text-white ring-2 ring-transparent shadow-sm`}>
+      <User className="w-1/2 h-1/2" />
+    </div>
+  );
+};
+
+// --- MAIN APP COMPONENT ---
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [inputCode, setInputCode] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isFirebaseReady, setIsFirebaseReady] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [partnerTyping, setPartnerTyping] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [currentTheme, setCurrentTheme] = useState(THEMES[1]); 
+  const [isRecording, setIsRecording] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0); 
+  const [mediaPreview, setMediaPreview] = useState(null);
+  const [viewingImage, setViewingImage] = useState(null);
+  const [showBigHeart, setShowBigHeart] = useState(false);
+  const [partnerStatus, setPartnerStatus] = useState('offline'); 
+  const [partnerLastSeenText, setPartnerLastSeenText] = useState('Offline');
+  const [userProfiles, setUserProfiles] = useState({}); 
+
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [activeMenuId, setActiveMenuId] = useState(null);
+  const [deleteModalId, setDeleteModalId] = useState(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  const [dragX, setDragX] = useState(0);
+  const touchStartX = useRef(0);
+
+  const messagesEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const profileInputRef = useRef(null); 
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const recordingIntervalRef = useRef(null); 
+
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) { console.error("Auth failed:", error); }
+    };
+    initAuth();
+    return onAuthStateChanged(auth, (u) => u && setIsFirebaseReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!db || !user || !isFirebaseReady) return; 
+    const unsubscribe = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'profiles'), (snapshot) => {
+      const profiles = {};
+      snapshot.docs.forEach(doc => {
+        profiles[doc.id] = doc.data().photoUrl;
+      });
+      setUserProfiles(profiles);
+    });
+    return () => unsubscribe();
+  }, [user, isFirebaseReady]);
+
+  useEffect(() => {
+    if (!user || !db) return;
+    const myStatusRef = doc(db, 'artifacts', appId, 'public', 'data', 'status', user.id);
+    const setOnline = () => setDoc(myStatusRef, { state: 'online', last_seen: serverTimestamp(), platform: 'web' }, { merge: true });
+    const setOffline = () => setDoc(myStatusRef, { state: 'offline', last_seen: serverTimestamp() }, { merge: true });
+    setOnline();
+    const heartbeatInterval = setInterval(setOnline, 10000); 
+    window.addEventListener('beforeunload', setOffline);
+    window.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setOnline(); });
+    return () => { clearInterval(heartbeatInterval); window.removeEventListener('beforeunload', setOffline); setOffline(); };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !db) return;
+    const partnerStatusRef = doc(db, 'artifacts', appId, 'public', 'data', 'status', user.partnerId);
+    let latestSnapshotData = null;
+    const unsubscribe = onSnapshot(partnerStatusRef, (docSnap) => {
+      if (docSnap.exists()) {
+        latestSnapshotData = docSnap.data();
+        updateStatus(); 
+      }
+    });
+    const uiInterval = setInterval(() => { updateStatus(); }, 5000);
+    function updateStatus() {
+      if (!latestSnapshotData) { setPartnerStatus('offline'); setPartnerLastSeenText('Offline'); return; }
+      const lastSeenMillis = latestSnapshotData.last_seen?.toMillis ? latestSnapshotData.last_seen.toMillis() : 0;
+      const diff = Date.now() - lastSeenMillis;
+      const isOnline = latestSnapshotData.state === 'online' && diff < 20000;
+      if (isOnline) { setPartnerStatus('online'); setPartnerLastSeenText('Active now'); } else { setPartnerStatus('offline'); setPartnerLastSeenText(formatLastSeen(latestSnapshotData.last_seen)); }
+    }
+    return () => { unsubscribe(); clearInterval(uiInterval); };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !db || !isFirebaseReady) return;
+    setIsLoading(true);
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'couple_chat_v3'), orderBy('createdAt', 'asc'), limit(100));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map(doc => {
+        const data = doc.data();
+        const text = (data.type === 'text' || data.type === 'image' || data.type === 'video') ? decryptMessage(data.encryptedContent) : '';
+        let replyText = '';
+        if (data.replyTo && data.replyTo.encryptedContent) replyText = decryptMessage(data.replyTo.encryptedContent);
+        return { id: doc.id, ...data, text, replyTo: data.replyTo ? { ...data.replyTo, text: replyText } : null };
+      });
+      setMessages(msgs);
+      setIsLoading(false);
+      if (msgs.length > 0) {
+        const lastMsg = msgs[msgs.length - 1];
+        if (lastMsg.senderId !== user.id && !lastMsg.seen) markAsSeen(lastMsg.id);
+      }
+    });
+    return () => unsubscribe();
+  }, [user, isFirebaseReady]);
+
+  useEffect(() => {
+    if (!user || !db || !isFirebaseReady) return;
+    const unsubscribe = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'typing_status', user.partnerId), (docSnap) => {
+      setPartnerTyping(docSnap.exists() && docSnap.data().isTyping);
+    });
+    return () => unsubscribe();
+  }, [user, isFirebaseReady]);
+
+  useEffect(() => {
+    if (!editingMessageId && !activeMenuId && !viewingImage && !deleteModalId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, partnerTyping, mediaPreview, isCompressing]);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (ACCESS_CODES[inputCode]) {
+      setUser(ACCESS_CODES[inputCode]);
+      localStorage.setItem('chat_user_code_v3', inputCode);
+    } else { setAuthError('Invalid code'); }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setInputCode('');
+    localStorage.removeItem('chat_user_code_v3');
+  };
+
+  const handleTyping = (e) => { setNewMessage(e.target.value); triggerTyping(); };
+  const triggerTyping = () => {
+    const ref = doc(db, 'artifacts', appId, 'public', 'data', 'typing_status', user.id);
+    if (!isTyping) { setIsTyping(true); setDoc(ref, { isTyping: true }); }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => { setIsTyping(false); setDoc(ref, { isTyping: false }); }, 2000);
+  };
+
+  const addEmoji = (emoji) => { setNewMessage(prev => prev + emoji); triggerTyping(); };
+  const markAsSeen = async (msgId) => {
+    try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'couple_chat_v3', msgId), { seen: true, seenAt: serverTimestamp() }); } catch (e) { console.error(e); }
+  };
+
+  const handleProfileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImage(file);
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', user.id), {
+        photoUrl: compressed,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (err) { alert("Failed to update profile photo."); }
+  };
+
+  const toggleMenu = (msgId, e) => { e.stopPropagation(); setActiveMenuId(activeMenuId === msgId ? null : msgId); };
+  const closeMenu = () => { setActiveMenuId(null); setShowEmojiPicker(false); };
+  const handleReply = (msg, e) => { e.stopPropagation(); setReplyingTo(msg); setEditingMessageId(null); setMediaPreview(null); closeMenu(); };
+  const handleEditStart = (msg, e) => { e.stopPropagation(); if(msg.senderId !== user.id) return; setEditingMessageId(msg.id); setNewMessage(msg.text); setReplyingTo(null); setMediaPreview(null); closeMenu(); };
+  const requestDelete = (msgId, e) => { e.stopPropagation(); setDeleteModalId(msgId); closeMenu(); };
+  const confirmDelete = async () => { if(!deleteModalId) return; try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'couple_chat_v3', deleteModalId)); setDeleteModalId(null); } catch(err) { console.error(err); setDeleteModalId(null); }};
+  const handleDoubleTap = async (msg, e) => { e.stopPropagation(); const currentHeart = msg.reactions?.[user.id] === '❤️'; if(!currentHeart) { setShowBigHeart(true); setTimeout(() => setShowBigHeart(false), 800); } await handleReaction(msg.id, currentHeart ? null : '❤️', e); };
+  const handleReaction = async (msgId, emoji, e) => { if(e) e.stopPropagation(); try { const msgRef = doc(db, 'artifacts', appId, 'public', 'data', 'couple_chat_v3', msgId); if(emoji === null) await updateDoc(msgRef, { [`reactions.${user.id}`]: deleteField() }); else await updateDoc(msgRef, { [`reactions.${user.id}`]: emoji }); closeMenu(); } catch(err) { console.error(err); } };
+  const cancelAction = () => { setReplyingTo(null); setEditingMessageId(null); setMediaPreview(null); setNewMessage(''); if(fileInputRef.current) fileInputRef.current.value = ''; };
+  
+  const sendMessage = async (e) => {
+    if (e) e.preventDefault();
+    if ((!newMessage.trim() && !mediaPreview) || !user || !db) return;
+    let contentToSend = newMessage;
+    let typeToSend = mediaPreview ? mediaPreview.type : 'text';
+    let mediaDataToSend = mediaPreview ? mediaPreview.data : null;
+    if (!contentToSend.trim() && !mediaPreview) return;
+    try {
+      if (editingMessageId) {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'couple_chat_v3', editingMessageId), { encryptedContent: encryptMessage(contentToSend), isEdited: true, editedAt: serverTimestamp() });
+        setEditingMessageId(null);
+      } else {
+        const payload = { senderId: user.id, senderName: user.name, createdAt: serverTimestamp(), seen: false, type: typeToSend, mediaData: mediaDataToSend, encryptedContent: encryptMessage(contentToSend), reactions: {}, };
+        if (replyingTo) payload.replyTo = { id: replyingTo.id, senderName: replyingTo.senderName, encryptedContent: encryptMessage(replyingTo.text), type: replyingTo.type };
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'couple_chat_v3'), payload);
+      }
+      setNewMessage(''); setMediaPreview(null); setIsTyping(false); setShowEmojiPicker(false); setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'typing_status', user.id), { isTyping: false });
+    } catch (error) { alert("Failed to send."); }
+  };
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    if (file.type.startsWith('video')) {
+      if (file.size < 800000) {
+         const reader = new FileReader(); 
+         reader.onloadend = () => setMediaPreview({ type: 'video', data: reader.result }); 
+         reader.readAsDataURL(file);
+      } else {
+         setIsCompressing(true);
+         try {
+           const compressedData = await compressVideo(file);
+           if (compressedData.length < 1400000) { 
+              setMediaPreview({ type: 'video', data: compressedData });
+           } else {
+              alert("Video still too large after compression. Try a shorter clip.");
+           }
+         } catch(err) {
+           console.error(err);
+           alert("Could not process video.");
+         } finally {
+           setIsCompressing(false);
+         }
+      }
+    } else {
+      try { const compressed = await compressImage(file); setMediaPreview({ type: 'image', data: compressed }); } catch(err) { console.error(err); }
+    }
+  };
+
+  const startRecording = async (e) => {
+    if (e) e.preventDefault(); 
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      mediaRecorderRef.current.ondataavailable = (event) => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
+      mediaRecorderRef.current.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        if (audioBlob.size < 100) return; 
+        const reader = new FileReader(); reader.readAsDataURL(audioBlob);
+        reader.onloadend = () => { if (reader.result.length < 700000) { setMediaPreview({ type: 'audio', data: reader.result }); } else { alert("Voice note too long!"); } };
+      };
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      recordingIntervalRef.current = setInterval(() => { setRecordingTime(prev => prev + 1); }, 1000);
+    } catch (err) { console.error("Mic Error:", err); alert("Microphone access denied or not supported."); }
+  };
+
+  const stopRecording = (e) => {
+    if (e) e.preventDefault();
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    }
+  };
+
+  const cancelRecording = (e) => {
+    if (e) e.preventDefault();
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      setIsRecording(false);
+      setRecordingTime(0);
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+      audioChunksRef.current = []; 
+    }
+  };
+
+  const handleTouchStart = (e) => { touchStartX.current = e.targetTouches[0].clientX; };
+  const handleTouchMove = (e) => { const touchX = e.targetTouches[0].clientX; const diff = touchX - touchStartX.current; setDragX(Math.min(0, Math.max(-70, diff))); };
+  const handleTouchEnd = () => { setDragX(0); };
+  const handleMouseDown = (e) => { touchStartX.current = e.clientX; document.addEventListener('mousemove', handleMouseMove); document.addEventListener('mouseup', handleMouseUp); };
+  const handleMouseMove = (e) => { const touchX = e.clientX; const diff = touchX - touchStartX.current; setDragX(Math.min(0, Math.max(-70, diff))); };
+  const handleMouseUp = () => { setDragX(0); document.removeEventListener('mousemove', handleMouseMove); document.removeEventListener('mouseup', handleMouseUp); };
+
+  // --- SAFE RENDER WRAPPER ---
+  const renderMessageContentSafe = (msg, isMe) => {
+    if (!msg) return null;
+    if (msg.type === 'text' && msg.text === '❤️') return <span className="text-4xl animate-pulse">❤️</span>;
+    if (msg.type === 'image' && msg.mediaData) return <div className="space-y-1"><img src={msg.mediaData} onClick={(e) => { e.stopPropagation(); setViewingImage(msg.mediaData); }} className="rounded-xl max-h-72 w-auto object-cover cursor-zoom-in active:scale-95 transition-transform" />{msg.text && <p className="pt-1"><LinkifiedText text={msg.text} isMe={isMe} /></p>}</div>;
+    if (msg.type === 'video' && msg.mediaData) return <div className="space-y-1"><div className="relative rounded-xl overflow-hidden max-h-72 max-w-[250px]"><video src={msg.mediaData} controls className="w-full h-full object-cover" /></div>{msg.text && <p className="pt-1"><LinkifiedText text={msg.text} isMe={isMe} /></p>}</div>;
+    if (msg.type === 'audio' && msg.mediaData) return <AudioPlayer src={msg.mediaData} isMe={isMe} />;
+    return <p className="text-[15px] leading-snug whitespace-pre-wrap"><LinkifiedText text={msg.text || ''} isMe={isMe} /></p>;
+  };
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6 font-sans">
+        <div className="w-24 h-24 bg-gradient-to-tr from-purple-600 to-orange-500 rounded-2xl flex items-center justify-center mb-6 shadow-2xl"><Heart className="w-12 h-12 text-white fill-white" /></div>
+        <h1 className="text-2xl font-bold text-white mb-2">Our Private Space</h1>
+        <p className="text-gray-400 text-center mb-8 text-sm">Enter your secret code to connect</p>
+        <form onSubmit={handleLogin} className="w-full max-w-xs space-y-4">
+          <input type="password" inputMode="numeric" value={inputCode} onChange={(e) => setInputCode(e.target.value)} placeholder="Passcode" className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-white text-center text-lg tracking-widest focus:outline-none focus:border-purple-500" />
+          {authError && <p className="text-red-500 text-xs text-center">{authError}</p>}
+          <button type="submit" disabled={!isFirebaseReady} className="w-full bg-white text-black font-semibold py-3 rounded-xl hover:bg-gray-200 active:scale-95 disabled:opacity-50">{isFirebaseReady ? 'Enter' : 'Loading...'}</button>
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex flex-col h-screen ${currentTheme.bg} ${currentTheme.text} transition-colors duration-300 font-sans overflow-hidden`}>
+      {showBigHeart && <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"><Heart className="w-32 h-32 text-red-500 fill-red-500 animate-bounce drop-shadow-2xl" /></div>}
+      {viewingImage && <div className="fixed inset-0 z-[60] bg-black flex items-center justify-center p-2" onClick={() => setViewingImage(null)}><button className="absolute top-4 left-4 p-2 bg-white/10 rounded-full text-white"><ArrowLeft className="w-6 h-6" /></button><img src={viewingImage} alt="Full" className="max-w-full max-h-full object-contain rounded-md shadow-2xl" /></div>}
+      {deleteModalId && <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setDeleteModalId(null)}><div className="bg-white dark:bg-gray-800 p-6 rounded-2xl w-full max-w-sm shadow-xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}><h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Delete Message?</h3><div className="flex space-x-3"><button onClick={() => setDeleteModalId(null)} className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 font-medium text-gray-600 dark:text-gray-300">Cancel</button><button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-red-500 text-white font-medium shadow-lg">Delete</button></div></div></div>}
+
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowSettingsModal(false)}>
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-6 rounded-3xl w-full max-w-md shadow-2xl flex flex-col max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-6 text-center">Settings</h3>
+            <div className="mb-8 flex flex-col items-center">
+              <div className="relative group cursor-pointer" onClick={() => profileInputRef.current?.click()}>
+                <Avatar uid={user.id} defaultBg={user.avatar} size="w-24 h-24" userProfiles={userProfiles} />
+                <div className="absolute inset-0 bg-black/30 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="w-8 h-8 text-white" /></div>
+              </div>
+              <input type="file" accept="image/*" ref={profileInputRef} className="hidden" onChange={handleProfileUpload} />
+              <p className="text-sm text-gray-500 mt-3">Tap photo to change</p>
+            </div>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Chat Themes</h4>
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              {THEMES.map(theme => (
+                <button key={theme.id} onClick={() => setCurrentTheme(theme)} className={`p-1 rounded-2xl border-2 transition-all ${currentTheme.id === theme.id ? 'border-blue-500 scale-105' : 'border-transparent hover:scale-105'}`}>
+                  <div className={`h-16 rounded-xl ${theme.bg === 'bg-black' ? 'bg-gray-900' : 'bg-gray-100'} flex items-center justify-center relative overflow-hidden`}>
+                      <div className={`absolute top-2 right-2 w-6 h-4 rounded-l-full rounded-tr-full ${theme.bubbleMe}`}></div>
+                      <div className={`absolute bottom-2 left-2 w-6 h-4 rounded-r-full rounded-tl-full ${theme.bubbleHer}`}></div>
+                  </div>
+                  <span className="text-gray-500 dark:text-gray-400 text-xs font-medium mt-2 block text-center">{theme.name}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setShowSettingsModal(false)} className="mt-auto w-full py-3 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-2xl font-semibold">Done</button>
+          </div>
+        </div>
+      )}
+
+      <header className={`${currentTheme.headerBg} px-4 py-3 flex items-center justify-between z-20 sticky top-0 shadow-sm`}>
+        <div className="flex items-center space-x-3">
+          <div className="relative">
+             <Avatar uid={user.partnerId} defaultBg={user.partnerId === 'user_bf' ? 'bg-blue-600' : 'bg-rose-500'} userProfiles={userProfiles} />
+             {partnerStatus === 'online' && !partnerTyping && <div className="absolute -bottom-1 -right-1 bg-green-500 w-3.5 h-3.5 rounded-full border-2 border-white"></div>}
+             {partnerTyping && <div className="absolute -bottom-1 -right-1 bg-green-500 w-3.5 h-3.5 rounded-full border-2 border-white animate-bounce"></div>}
+          </div>
+          <div className="flex flex-col">
+            <h2 className="font-bold text-[17px] leading-tight">{user.partnerId === 'user_bf' ? 'Boyfriend' : 'Girlfriend'}</h2>
+            <span className="text-[13px] text-gray-400">{partnerTyping ? 'Typing...' : partnerLastSeenText}</span>
+          </div>
+        </div>
+        <div className="flex items-center space-x-5 pr-1">
+          <Phone className="w-6 h-6 text-gray-400 hover:text-gray-600 cursor-pointer" />
+          <Video className="w-7 h-7 text-gray-400 hover:text-gray-600 cursor-pointer" />
+          <Settings onClick={() => setShowSettingsModal(true)} className="w-6 h-6 text-gray-400 hover:text-gray-600 cursor-pointer" />
+          <LogOut onClick={handleLogout} className="w-6 h-6 text-gray-400 hover:text-red-500 cursor-pointer" />
+        </div>
+      </header>
+
+      <div 
+        className="flex-1 overflow-y-auto overflow-x-hidden p-4 flex flex-col scroll-smooth" 
+        onClick={closeMenu}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onMouseDown={handleMouseDown} 
+      >
+        {isLoading && <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 text-gray-400 animate-spin" /></div>}
+        
+        {messages.map((msg, index) => {
+          const isMe = msg.senderId === user.id;
+          const nextMsg = messages[index + 1];
+          const prevMsg = messages[index - 1];
+          const isLastInSequence = !nextMsg || nextMsg.senderId !== msg.senderId;
+          const isFirstInSequence = !prevMsg || prevMsg.senderId !== msg.senderId;
+          const showAvatar = !isMe && isLastInSequence;
+          const showMenu = activeMenuId === msg.id;
+          const hasReactions = msg.reactions && Object.keys(msg.reactions).length > 0;
+          const showDate = !prevMsg || (msg.createdAt?.seconds && prevMsg.createdAt?.seconds && new Date(msg.createdAt.seconds * 1000).toDateString() !== new Date(prevMsg.createdAt.seconds * 1000).toDateString());
+          const marginBottom = hasReactions ? 'mb-4' : (isLastInSequence ? 'mb-4' : 'mb-2');
+
+          return (
+            <React.Fragment key={msg.id}>
+              {showDate && msg.createdAt && <div className="flex justify-center my-4"><span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide bg-gray-100/10 px-3 py-1 rounded-full">{formatGroupDate(msg.createdAt)}</span></div>}
+              
+              <div 
+                className={`flex w-full ${isMe ? 'justify-end' : 'justify-start items-end'} group relative ${marginBottom} transition-transform duration-300 ease-out`}
+                style={{ transform: `translateX(${dragX}px)` }}
+              >
+                
+                {!isMe && (
+                  <div className={`mr-2 mb-1 flex-shrink-0 ${showAvatar ? 'opacity-100' : 'opacity-0'}`}>
+                    <Avatar uid={msg.senderId} defaultBg={user.partnerId === 'user_bf' ? 'bg-blue-600' : 'bg-rose-500'} size="w-7 h-7" userProfiles={userProfiles} />
+                  </div>
+                )}
+                
+                <div className={`relative max-w-[70%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  {showMenu && (
+                    <div onClick={(e) => e.stopPropagation()} className={`absolute bottom-full mb-2 ${isMe ? 'right-0' : 'left-0'} bg-gray-800 text-white rounded-xl shadow-2xl z-30 flex items-center p-1.5 space-x-1 animate-in zoom-in-95 duration-100`}>
+                      {REACTION_EMOJIS.map(emoji => {
+                        const isSelected = msg.reactions?.[user.id] === emoji;
+                        return <button key={emoji} onClick={(e) => handleReaction(msg.id, isSelected ? null : emoji, e)} className={`p-1.5 rounded-full text-lg transition-colors ${isSelected ? 'bg-gray-600' : 'hover:bg-gray-700'}`}>{emoji}</button>;
+                      })}
+                      <div className="w-[1px] h-6 bg-gray-600 mx-1"></div>
+                      <button onClick={(e) => handleReply(msg, e)} className="p-2 hover:bg-gray-700 rounded-full text-gray-300"><CornerUpLeft className="w-4 h-4" /></button>
+                      {isMe && (
+                        <>
+                          <button onClick={(e) => handleEditStart(msg, e)} className="p-2 hover:bg-gray-700 rounded-full text-gray-300 transition-colors"><Edit2 className="w-4 h-4" /></button>
+                          <button onClick={(e) => requestDelete(msg.id, e)} className="p-2 hover:bg-red-900/50 hover:text-red-400 rounded-full text-gray-300 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  
+                  {msg.replyTo && <div className={`text-xs mb-1 px-3 py-2 rounded-2xl w-full bg-gray-500/10 border-l-4 border-gray-400 text-gray-400 truncate max-w-full opacity-80 backdrop-blur-sm`}><span className="font-semibold block mb-0.5">Replying to {msg.replyTo.senderName}</span>{msg.replyTo.type === 'image' ? '📷 Photo' : msg.replyTo.type === 'video' ? '🎥 Video' : msg.replyTo.type === 'audio' ? '🎤 Audio' : msg.replyTo.text}</div>}
+                  
+                  <div onDoubleClick={(e) => handleDoubleTap(msg, e)} onClick={(e) => toggleMenu(msg.id, e)} className={`cursor-pointer px-4 py-2.5 relative shadow-sm text-[15px] transition-all ${isMe ? `${currentTheme.bubbleMe} text-white rounded-l-2xl ${isFirstInSequence ? 'rounded-tr-2xl' : 'rounded-tr-md'} ${isLastInSequence ? 'rounded-br-2xl' : 'rounded-br-md'}` : `${currentTheme.bubbleHer} rounded-r-2xl ${isFirstInSequence ? 'rounded-tl-2xl' : 'rounded-tl-md'} ${isLastInSequence ? 'rounded-bl-2xl' : 'rounded-bl-md'} border border-gray-100/5`} ${(msg.type === 'image' || msg.type === 'video') ? 'p-1 bg-transparent hover:brightness-95' : ''} ${msg.text === '❤️' ? 'bg-transparent shadow-none border-none p-0' : ''}`}>
+                    {renderMessageContentSafe(msg, isMe)}
+                    {hasReactions && <div className={`absolute -bottom-2 ${isMe ? 'left-0 -translate-x-2' : 'right-0 translate-x-2'} bg-gray-800 text-white border-[3px] ${currentTheme.bg.includes('black') ? 'border-black' : 'border-white'} rounded-full px-1 py-0.5 text-xs shadow-md flex items-center scale-90 z-10`}>{Object.values(msg.reactions).map((r, i) => (typeof r === 'string' ? <span key={i}>{r}</span> : null))}</div>}
+                  </div>
+                  
+                  <div className="absolute right-[-55px] top-1/2 -translate-y-1/2 flex items-center h-full opacity-0 transition-opacity duration-300" style={{ opacity: dragX < -20 ? 1 : 0 }}>
+                    <span className="text-[10px] font-medium text-gray-500 whitespace-nowrap">
+                      {formatTimeOnly(msg.createdAt)}
+                    </span>
+                  </div>
+
+                </div>
+              </div>
+            </React.Fragment>
+          );
+        })}
+        <div ref={messagesEndRef} />
+      </div>
+
+      <div className={`${currentTheme.bg} p-3 pb-6 sm:pb-3`}>
+        {(replyingTo || editingMessageId || mediaPreview) && <div className="flex items-center justify-between bg-gray-800/10 p-2 rounded-t-xl mb-2 mx-1 animate-in slide-in-from-bottom-2"><div className="flex items-center text-xs text-gray-500">{replyingTo ? `Replying to ${replyingTo.senderName}` : editingMessageId ? 'Editing message' : 'Media attached'}</div><button onClick={cancelAction} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button></div>}
+        
+        <form onSubmit={sendMessage} className="flex items-center space-x-2 relative">
+          <input type="file" accept="image/*,video/*" className="hidden" ref={fileInputRef} onChange={handleFileSelect} />
+          
+          {!isRecording && (
+            <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2.5 bg-blue-500 rounded-full text-white flex-shrink-0 transition-transform active:scale-95 hover:bg-blue-600">
+              <ImageIcon className="w-5 h-5" />
+            </button>
+          )}
+
+          {showEmojiPicker && <div className="absolute bottom-full right-0 mb-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-3 rounded-2xl shadow-2xl grid grid-cols-6 gap-2 w-64 z-50 animate-in zoom-in-95 duration-100 max-h-64 overflow-y-auto">{INPUT_EMOJIS.map((e, index) => <button key={`${e}-${index}`} type="button" onClick={() => addEmoji(e)} className="text-2xl hover:scale-125 transition-transform p-1">{e}</button>)}</div>}
+          
+          <div className={`flex-1 ${currentTheme.inputBg} rounded-full flex items-center px-4 py-2.5 transition-all border border-transparent focus-within:border-gray-300`}>
+            {isRecording ? (
+              <div className="flex items-center w-full justify-between animate-in fade-in">
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-red-500 font-mono font-medium">{formatDuration(recordingTime)}</span>
+                </div>
+                <button type="button" onClick={cancelRecording} className="text-xs font-bold text-gray-500 hover:text-red-600 uppercase tracking-wider px-3">Slide to Cancel</button>
+              </div>
+            ) : (
+              // INPUT BAR STATE 2: TEXT INPUT (Loading indicator when compressing)
+              isCompressing ? (
+                 <div className="flex-1 flex items-center text-gray-500 text-sm animate-pulse"><Loader2 className="w-4 h-4 mr-2 animate-spin" />Compressing video...</div>
+              ) : (
+                 <input 
+                   type="text" 
+                   value={newMessage} 
+                   onChange={handleTyping} 
+                   placeholder="Message..." 
+                   className={`flex-1 bg-transparent border-none focus:outline-none ${currentTheme.text} placeholder-gray-400 text-[15px]`} 
+                 />
+              )
+            )}
+
+            <div className="flex space-x-2 ml-2 text-gray-400 items-center">
+              {!newMessage && !mediaPreview && !isRecording && !isCompressing && (
+                <div className="flex space-x-3 items-center">
+                   <button type="button" className="hover:text-gray-600 cursor-pointer transition-transform active:scale-90" onMouseDown={startRecording} onMouseUp={stopRecording} onTouchStart={startRecording} onTouchEnd={stopRecording} onTouchCancel={stopRecording}><Mic className="w-6 h-6" /></button>
+                   <Clapperboard className="w-6 h-6 hover:text-gray-600 cursor-pointer sm:hidden" onClick={() => fileInputRef.current?.click()} />
+                   <SmilePlus className={`w-6 h-6 cursor-pointer transition-colors ${showEmojiPicker ? 'text-blue-500' : 'hover:text-gray-600'}`} onClick={() => setShowEmojiPicker(!showEmojiPicker)} />
+                </div>
+              )}
+              {(newMessage.trim() || mediaPreview || isRecording) && !isCompressing && <button type={isRecording ? "button" : "submit"} onClick={isRecording ? stopRecording : undefined} className="text-blue-500 font-semibold text-base px-2 hover:text-blue-600 transition-colors ml-1 animate-in zoom-in">{isRecording ? <ArrowLeft className="w-6 h-6 rotate-180 fill-current" /> : 'Send'}</button>}
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
